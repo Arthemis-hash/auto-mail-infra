@@ -1,0 +1,39 @@
+# ── Environnement ──────────────────────────────────────────
+venv/
+.env
+
+# ── Base de données ────────────────────────────────────────
+data/pipeline.db
+data/
+
+# ── Python ─────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ── macOS ──────────────────────────────────────────────────
+.DS_Store
+*.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# ── Éditeurs / IDE ─────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Logs / Temp ────────────────────────────────────────────
+*.log
+/tmp/
+archive/
+
+# ── Tests locaux ───────────────────────────────────────────
+test_*.py
+note_*.md

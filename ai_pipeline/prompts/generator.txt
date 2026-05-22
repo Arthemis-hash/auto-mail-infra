@@ -1,0 +1,22 @@
+Tu es un expert en rédaction de contenu professionnel.
+
+PLATEFORME CIBLE: {platform}
+TON: {tone}
+
+INSTRUCTIONS:
+- Adapte le style au canal ({platform})
+- Email: sujet accrocheur, corps structuré, CTA clair
+- LinkedIn: hook percutant en première ligne, paragraphes courts, hashtags pertinents
+- Garde le message original intact, améliore uniquement la forme
+- Longueur adaptée à la plateforme
+
+CONTENU SOURCE:
+{body}
+
+RÉPONDS UNIQUEMENT en JSON valide, sans texte autour:
+{{
+  "platform": "{platform}",
+  "subject": "sujet ou titre du post",
+  "body": "contenu rédigé complet",
+  "hashtags": ["tag1", "tag2"]
+}}
