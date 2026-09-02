@@ -7,6 +7,7 @@ SÉCURITÉ :
   - Opérations destructives interdites
   - Rate-limit par plateforme
   - Audit trail dans SQLite
+  - Vérification de sécurité de la base de données au démarrage
 
 Flow :
   1. parse_note(filepath)           → parse la note (YAML + body)
@@ -40,7 +41,7 @@ from skills.prepare_assets import prepare_assets
 from skills.dispatcher import dispatch
 from skills.archive import archive
 from utils.logger import logger
-from utils.db import init as db_init, add_history, add_rapp
+from utils.db import init as db_init, add_history, add_rapp, print_database_security_report
 from utils.security import require_confirmation, audit
 from utils.scheduler import wait_until
 from utils.validate import validate_metadata
@@ -90,9 +91,12 @@ def run(filepath: str) -> None:
     db_init()
     logger.info(f"Pipeline démarré: {filepath}")
 
+    # ── Vérification de sécurité de la DB ───────────────────────────
+    print_database_security_report()
+
     data = parse_note(filepath)
 
-    # ── Validation des métadonnées ─────────────────────────────
+    # ── Validation des métadonnées ─────────────────────────────────
     errors = validate_metadata(data["metadata"])
     if errors:
         for err in errors:
@@ -100,13 +104,13 @@ def run(filepath: str) -> None:
         logger.error(f"Validation échouée: {errors}")
         return
 
-    # ── Génération ──────────────────────────────────────────────
+    # ── Génération ──────────────────────────────────────────────────
     prompt = gen_build_prompt(data)
     print(f"\n--- PROMPT GÉNÉRATION (à donner à OpenCode) ---\n{prompt}\n---\n")
     raw = input("Colle la réponse JSON d'OpenCode : ")
     content = gen_save_result(data, json.loads(raw))
 
-    # ── Validation du contenu ───────────────────────────────────
+    # ── Validation du contenu ───────────────────────────────────────
     val_prompt = val_build_prompt(content)
     print(f"\n--- PROMPT VALIDATION (à donner à OpenCode) ---\n{val_prompt}\n---\n")
     raw = input("Colle la réponse JSON d'OpenCode (validation) : ")
@@ -119,10 +123,10 @@ def run(filepath: str) -> None:
         audit("pipeline", "validation", "refused", note_path=filepath, details={"issues": validation["issues"]})
         return
 
-    # ── Assets ──────────────────────────────────────────────────
+    # ── Assets ──────────────────────────────────────────────────────
     assets = prepare_assets(data)
 
-    # ── Recap + confirmation bloquante ─────────────────────────
+    # ── Recap + confirmation bloquante ─────────────────────────────
     if not recap_and_confirm(content, data["metadata"], assets):
         platform = data["metadata"].get("platform", "?")
         add_history(filepath, platform, "cancelled", {"reason": "user cancelled"})
@@ -130,7 +134,7 @@ def run(filepath: str) -> None:
         print("Pipeline annulé.")
         return
 
-    # ── Planification (wait_until) ──────────────────────────────
+    # ── Planification (wait_until) ──────────────────────────────────
     platform = data["metadata"].get("platform", "email")
     schedule_at = data["metadata"].get("schedule_at")
     if schedule_at:
@@ -141,11 +145,11 @@ def run(filepath: str) -> None:
             print(f"\nErreur de planification: {e}")
             return
 
-    # ── Dispatch + Archive ──────────────────────────────────────
+    # ── Dispatch + Archive ──────────────────────────────────────────
     dispatch(platform, content, data["metadata"], assets.get("valid"))
     archive(filepath)
 
-    # ── Log ─────────────────────────────────────────────────────
+    # ── Log ─────────────────────────────────────────────────────────
     add_history(filepath, platform, "published", {
         "subject": content.get("subject"),
         "recipient": data["metadata"].get("destinataire"),

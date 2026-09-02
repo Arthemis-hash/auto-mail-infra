@@ -2,6 +2,8 @@
 
 import sqlite3
 import json
+import os
+import stat
 from datetime import datetime
 from pathlib import Path
 
@@ -53,7 +55,184 @@ def init():
     con.close()
 
 
-# ── Tokens ──────────────────────────────────────────────────────────────
+def check_database_security() -> dict:
+    """Vérifie la sécurité de la base de données.
+    
+    Retourne un dictionnaire avec les résultats :
+    {
+        "status": "secure" | "warning" | "danger",
+        "db_exists": bool,
+        "db_readable": bool,
+        "db_world_readable": bool,
+        "permissions": str (mode octale),
+        "contains_tokens": bool,
+        "contains_secrets": bool,
+        "size_mb": float,
+        "details": [list of findings],
+    }
+    """
+    results = {
+        "status": "secure",
+        "db_exists": DB_PATH.exists(),
+        "db_readable": False,
+        "db_world_readable": False,
+        "permissions": None,
+        "contains_tokens": False,
+        "contains_secrets": False,
+        "size_mb": 0.0,
+        "details": [],
+    }
+    
+    # Vérifier si la DB existe
+    if not results["db_exists"]:
+        results["details"].append("✅ Base de données non encore créée (OK si première exécution)")
+        return results
+    
+    # Vérifier les permissions d'accès
+    try:
+        results["db_readable"] = os.access(DB_PATH, os.R_OK)
+        if not results["db_readable"]:
+            results["status"] = "warning"
+            results["details"].append("⚠️ Base de données non lisible (permissions insuffisantes)")
+    except Exception as e:
+        results["details"].append(f"❌ Erreur lors de la vérification de lecture: {e}")
+        results["status"] = "danger"
+    
+    # Vérifier les permissions fichier (Unix/Linux/macOS)
+    try:
+        mode = stat.filemode(os.stat(DB_PATH).st_mode)
+        mode_octal = oct(os.stat(DB_PATH).st_mode)[-3:]
+        results["permissions"] = mode_octal
+        
+        # Vérifier si le fichier est lisible par d'autres utilisateurs
+        file_stat = os.stat(DB_PATH)
+        others_can_read = bool(file_stat.st_mode & stat.S_IROTH)
+        results["db_world_readable"] = others_can_read
+        
+        if others_can_read:
+            results["status"] = "danger"
+            results["details"].append(
+                f"🚨 DANGER: La base de données est lisible par d'autres utilisateurs "
+                f"(permissions {mode_octal}). Contient des tokens OAuth!"
+            )
+        else:
+            results["details"].append(f"✅ Permissions fichier sécurisées ({mode_octal})")
+    except Exception as e:
+        results["details"].append(f"⚠️ Impossible de vérifier les permissions: {e}")
+    
+    # Vérifier la taille du fichier
+    try:
+        size_bytes = DB_PATH.stat().st_size
+        results["size_mb"] = round(size_bytes / (1024 * 1024), 2)
+        results["details"].append(f"📊 Taille de la base de données: {results['size_mb']} MB")
+    except Exception as e:
+        results["details"].append(f"⚠️ Impossible de vérifier la taille: {e}")
+    
+    # Vérifier le contenu de la DB
+    try:
+        con = _conn()
+        
+        # Vérifier la présence de tokens
+        token_count = con.execute(
+            "SELECT COUNT(*) FROM tokens WHERE access_token IS NOT NULL"
+        ).fetchone()[0]
+        results["contains_tokens"] = token_count > 0
+        
+        if token_count > 0:
+            results["details"].append(f"🔐 {token_count} token(s) OAuth stocké(s) dans la DB")
+            results["status"] = "warning"
+        
+        # Vérifier la présence de secrets potentiels dans config
+        secrets_keywords = ["password", "secret", "key", "token", "credential"]
+        secret_count = 0
+        
+        config_rows = con.execute("SELECT key, value FROM config").fetchall()
+        for key, value in config_rows:
+            if any(kw in key.lower() for kw in secrets_keywords):
+                secret_count += 1
+                # Ne pas afficher la valeur réelle!
+                results["details"].append(f"🔐 Configuration sensible trouvée: '{key}'")
+        
+        results["contains_secrets"] = secret_count > 0
+        
+        # Vérifier la table rapp (envois)
+        rapp_count = con.execute("SELECT COUNT(*) FROM rapp").fetchone()[0]
+        if rapp_count > 0:
+            results["details"].append(f"📧 {rapp_count} envoi(s) enregistré(s) dans la traçabilité")
+        
+        # Vérifier la table history
+        history_count = con.execute("SELECT COUNT(*) FROM history").fetchone()[0]
+        if history_count > 0:
+            results["details"].append(f"📝 {history_count} événement(s) dans l'historique")
+        
+        con.close()
+        
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            results["details"].append("✅ Tables de la DB non encore créées")
+        else:
+            results["status"] = "danger"
+            results["details"].append(f"❌ Erreur d'accès à la DB: {e}")
+    except Exception as e:
+        results["status"] = "danger"
+        results["details"].append(f"❌ Erreur lors de la vérification du contenu: {e}")
+    
+    return results
+
+
+def print_database_security_report():
+    """Affiche un rapport formaté de la sécurité de la DB."""
+    report = check_database_security()
+    
+    print("\n" + "=" * 70)
+    print("  🔒 VÉRIFICATION DE SÉCURITÉ DE LA BASE DE DONNÉES")
+    print("=" * 70)
+    
+    # Afficher le statut global
+    status_emoji = {
+        "secure": "✅",
+        "warning": "⚠️ ",
+        "danger": "🚨",
+    }
+    status_text = {
+        "secure": "Sécurisée",
+        "warning": "Attention requise",
+        "danger": "Danger!",
+    }
+    
+    print(f"\nStatut: {status_emoji[report['status']]} {status_text[report['status']]}")
+    
+    # Afficher les détails
+    print("\nDétails:")
+    for detail in report["details"]:
+        print(f"  {detail}")
+    
+    print("\n" + "=" * 70)
+    
+    # Recommandations
+    if report["status"] == "danger":
+        print("\n⚠️  ACTIONS RECOMMANDÉES:")
+        if report["db_world_readable"]:
+            print("  1. Changez les permissions du fichier:")
+            print(f"     chmod 600 {DB_PATH}")
+            print("  2. Considérez de supprimer et recréer la DB si compromise")
+    elif report["status"] == "warning":
+        print("\n💡 SUGGESTIONS:")
+        if report["contains_tokens"]:
+            print("  - Assurez-vous que pipeline.db est dans .gitignore (✓)")
+            print("  - Ne partagez jamais ce fichier")
+            print("  - Considérez chiffrer la DB avec cipher de SQLite")
+        print("  - Régulez l'accès au fichier (permissions 0600)")
+    else:
+        print("\n✅ Pas de problèmes de sécurité détectés.")
+        print("  - Continuez à protéger le fichier data/pipeline.db")
+        print("  - Ne commitez jamais ce fichier dans Git")
+    
+    print()
+    return report
+
+
+# ── Tokens ────────────────────────────────────────────────────────────[...]
 
 def save_token(platform: str, access_token: str, refresh_token: str | None = None,
                expires_at: int | None = None, scope: str = "") -> None:
@@ -96,7 +275,7 @@ def delete_token(platform: str) -> None:
     con.close()
 
 
-# ── History ─────────────────────────────────────────────────────────────
+# ── History ─────────────────────────────────────────────────────────────[...]
 
 def add_history(note_path: str, platform: str, status: str, metadata: dict | None = None) -> int:
     init()
